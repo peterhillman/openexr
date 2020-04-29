@@ -106,7 +106,7 @@ usageMessage (const char argv0[], bool verbose = false)
         "\n"
         "Multipart Options:\n"
         "\n"
-        "-p i      part number, default is 0\n";
+        "-p i      part number, default is 0\n"
         "-a        convert all parts\n";
 
         cerr << endl;
