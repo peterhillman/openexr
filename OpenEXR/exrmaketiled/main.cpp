@@ -107,6 +107,7 @@ usageMessage (const char argv0[], bool verbose = false)
         "Multipart Options:\n"
         "\n"
         "-p i      part number, default is 0\n";
+        "-a        convert all parts\n";
 
         cerr << endl;
     }
@@ -363,6 +364,11 @@ main(int argc, char **argv)
         {
             getPartNum (argc, argv, i, &partnum);
         }
+        else if (!strcmp (argv[i], "-a"))
+        {
+            partnum = -1;
+            i += 1;
+        }
         else
         {
             //
@@ -400,19 +406,25 @@ main(int argc, char **argv)
         MultiPartInputFile input (inFile);
         int parts = input.parts();
 
-        if (partnum < 0 || partnum >= parts){
+        if (partnum < -1 || partnum >= parts){
             cerr << "ERROR: you asked for part " << partnum << " in " << inFile;
             cerr << ", which only has " << parts << " parts\n";
             exit(1);
         }
 
-        Header h = input.header (partnum);
-        if (h.type() == DEEPTILE || h.type() == DEEPSCANLINE)
-        {
-            cerr << "Cannot make tile for deep data" << endl;
-            exit(1);
-        }
 
+        for ( int i = 0 ; i < parts ; ++i )
+        {
+            if( partnum ==-1 || i==partnum )
+            {
+                Header h = input.header ( i );
+                if (h.type() == DEEPTILE || h.type() == DEEPSCANLINE)
+                {
+                   cerr << "Cannot make tile for deep data" << endl;
+                  exit(1);
+                }
+            }
+        }
     }
 
 

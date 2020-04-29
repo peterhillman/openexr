@@ -511,12 +511,6 @@ makeTiled (const char inFileName[],
            Extrapolation extY,
            bool verbose)
 {
-    Image image0;
-    Image image1;
-    Image image2;
-    Header header;
-    FrameBuffer fb;
-    vector<Header> headers;
 
     //
     // Load the input image
@@ -525,15 +519,23 @@ makeTiled (const char inFileName[],
     MultiPartInputFile input (inFileName);
     int parts = input.parts();
 
+
+    vector<Image> image0(parts);
+    vector<Image> image1(parts);
+    vector<Image> image2(parts);
+    vector<FrameBuffer> fb(parts);
+    vector<Header> headers;
+
+
     for (int p = 0 ; p < parts; p++)
     {
         if (verbose)
             cout << "reading file " << inFileName << endl;
 
-        if(p == partnum)
+        if(p == partnum || partnum == -1)
         {
             InputPart in (input, p);
-            header = in.header();
+            Header header = in.header();
             if (hasEnvmap (header) && mode != ONE_LEVEL)
             {
                 //
@@ -547,7 +549,7 @@ makeTiled (const char inFileName[],
                                       "Use exrenvmap instead.");
             }
 
-            image0.resize (header.dataWindow());
+            image0[p].resize (header.dataWindow());
 
             for (ChannelList::ConstIterator i = header.channels().begin();
                             i != header.channels().end();
@@ -562,13 +564,13 @@ makeTiled (const char inFileName[],
                                          "not supported in tiled files.");
                 }
 
-                image0.addChannel (name, channel.type);
-                image1.addChannel (name, channel.type);
-                image2.addChannel (name, channel.type);
-                fb.insert (name, image0.channel(name).slice());
+                image0[p].addChannel (name, channel.type);
+                image1[p].addChannel (name, channel.type);
+                image2[p].addChannel (name, channel.type);
+                fb[p].insert (name, image0[p].channel(name).slice());
             }
 
-            in.setFrameBuffer (fb);
+            in.setFrameBuffer (fb[p]);
             in.readPixels (header.dataWindow().min.y, header.dataWindow().max.y);
 
 
@@ -587,7 +589,7 @@ makeTiled (const char inFileName[],
                 addWrapmodes (header, extToString (extX) + "," + extToString (extY));
 
             //
-            // set tileDescription, type, and chunckcount for multipart
+            // set tileDescription, type, and chunkcount for multipart
             //
             header.setType(TILEDIMAGE);
             int chunkcount = getChunkOffsetTableSize(header, true);
@@ -611,15 +613,15 @@ makeTiled (const char inFileName[],
 
     for(int p = 0 ; p < parts; p++)
     {
-        if (p == partnum)
+        if (p == partnum || partnum==-1)
         {
             try
             {
-                TiledOutputPart out (output, partnum);
+                TiledOutputPart out (output, p );
             //    TiledOutputFile out (outFileName, header);
 
 
-                out.setFrameBuffer (fb);
+                out.setFrameBuffer (fb[p]);
 
                 if (verbose)
                     cout << "writing file " << outFileName << "\n"
@@ -638,36 +640,36 @@ makeTiled (const char inFileName[],
                 {
                     for (int l = 1; l < out.numLevels(); ++l)
                     {
-                        image1.resize (out.dataWindowForLevel (l, l - 1));
+                        image1[p].resize (out.dataWindowForLevel (l, l - 1));
 
-                        reduceX (header.channels(),
+                        reduceX (headers[p].channels(),
                                  doNotFilter,
                                  extX,
                                  l & 1,
-                                 image0,
-                                 image1);
+                                 image0[p],
+                                 image1[p]);
 
-                        image0.resize (out.dataWindowForLevel (l, l));
+                        image0[p].resize (out.dataWindowForLevel (l, l));
 
-                        reduceY (header.channels(),
+                        reduceY (headers[p].channels(),
                                  doNotFilter,
                                  extY,
                                  l & 1,
-                                 image1,
-                                 image0);
+                                 image1[p],
+                                 image0[p]);
 
                         if (verbose)
                             cout << "level (" << l << ", " << l << ")" << endl;
 
-                        storeLevel (out, header.channels(), l, l, image0);
+                        storeLevel (out, headers[p].channels(), l, l, image0[p]);
                     }
                 }
 
                 if (mode == RIPMAP_LEVELS)
                 {
-                    Image *iptr0 = &image0;
-                    Image *iptr1 = &image1;
-                    Image *iptr2 = &image2;
+                    Image *iptr0 = &image0[p];
+                    Image *iptr1 = &image1[p];
+                    Image *iptr2 = &image2[p];
 
                     for (int ly = 0; ly < out.numYLevels(); ++ly)
                     {
@@ -675,7 +677,7 @@ makeTiled (const char inFileName[],
                         {
                             iptr2->resize (out.dataWindowForLevel (0, ly + 1));
 
-                            reduceY (header.channels(),
+                            reduceY (headers[p].channels(),
                                      doNotFilter,
                                      extY,
                                      ly & 1,
@@ -690,14 +692,14 @@ makeTiled (const char inFileName[],
                                 if (verbose)
                                     cout << "level (" << lx << ", " << ly << ")" << endl;
 
-                                storeLevel (out, header.channels(), lx, ly, *iptr0);
+                                storeLevel (out, headers[p].channels(), lx, ly, *iptr0);
                             }
 
                             if (lx < out.numXLevels() - 1)
                             {
                                 iptr1->resize (out.dataWindowForLevel (lx + 1, ly));
 
-                                reduceX (header.channels(),
+                                reduceX (headers[p].channels(),
                                          doNotFilter,
                                          extX,
                                          lx & 1,
