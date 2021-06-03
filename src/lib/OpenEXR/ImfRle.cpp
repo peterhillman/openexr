@@ -94,34 +94,53 @@ rleUncompress (int inLength, int maxLength, const signed char in[], char out[])
     {
 	if (*in < 0)
 	{
+            //
+            // negative value of *in
+            // indicates -*in bytes subsequent bytes
+            // directly copied from in to out
+            //
+            //
 	    int count = -((int)*in++);
 	    inLength -= count + 1;
 
 	    if (0 > (maxLength -= count))
-		return 0;
+            {
+                return 0;
+            }
+            // check the input buffer is big enough to contain
+            // 'count' bytes of remaining data
+            if (inLength < 0)
+            {
+                return 0;
+            }
 
-        // check the input buffer is big enough to contain
-        // 'count' bytes of remaining data
-        if (inLength < 0)
-          return 0;
-
-        memcpy(out, in, count);
-        out += count;
-        in  += count;
-	}
+            memcpy(out, in, count);
+            out += count;
+            in  += count;
+        }
 	else
 	{
+            //
+            // non-negative *in indicates
+            // following byte repeated **in+1) times
+            //
+
 	    int count = *in++;
 	    inLength -= 2;
 
 	    if (0 > (maxLength -= count + 1))
 		return 0;
-
-        memset(out, *(char*)in, count+1);
-        out += count+1;
+            // check the input buffer is big enough to contain
+            // one byte of remaining data
+            if (inLength < 0)
+            {
+                return 0;
+            }
+            memset(out, *(char*)in, count+1);
+            out += count+1;
 
 	    in++;
-	}
+        }
     }
 
     return out - outStart;
