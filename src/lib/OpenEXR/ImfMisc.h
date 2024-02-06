@@ -123,7 +123,8 @@ size_t bytesPerDeepLineTable (
 
 IMF_EXPORT
 void offsetInLineBufferTable (
-    const std::vector<size_t>& bytesPerLine,
+    const std::vector<size_t>& samplesPerLine,
+    size_t                     bytesPerSample,
     int                        scanline1,
     int                        scanline2,
     int                        linesInLineBuffer,
@@ -131,7 +132,7 @@ void offsetInLineBufferTable (
 
 IMF_EXPORT
 void offsetInLineBufferTable (
-    const std::vector<size_t>& bytesPerLine,
+    const std::vector<size_t>& samplesPerLine,
     int                        linesInLineBuffer,
     std::vector<size_t>&       offsetInLineBuffer);
 

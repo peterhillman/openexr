@@ -81,23 +81,46 @@ generateRandomFile (
 
     header.setType (DEEPSCANLINE);
 
+
+    //
+    // bulkWrite mode stores the entire image;
+    // otherwise only  single scanline is written
+    //
+    int bufferHeight = bulkWrite ? height : 1;
+
     Array<Array2D<void*>> data (channelCount);
     for (int i = 0; i < channelCount; i++)
-        data[i].resizeErase (height, width);
+        data[i].resizeErase (bufferHeight, width);
 
-    sampleCount.resizeErase (height, width);
+    sampleCount.resizeErase(height,width);
+
+    //
+    // for single scanline mode, a separate duplicate buffer with a single scanline
+    //
+    Array2D<unsigned int> localSampleCount(1,width);
+
 
     remove (filename.c_str ());
     DeepScanLineOutputFile file (filename.c_str (), header, 8);
 
     DeepFrameBuffer frameBuffer;
 
-    frameBuffer.insertSampleCountSlice (Slice (
-        IMF::UINT, // type // 7
-        (char*) (&sampleCount[0][0] - dataWindow.min.x - dataWindow.min.y * width), // base
-        sizeof (unsigned int) * 1,       // xStride
-        sizeof (unsigned int) * width)); // yStride
-
+    if(bulkWrite)
+    {
+        frameBuffer.insertSampleCountSlice (Slice (
+            IMF::UINT, // type // 7
+            (char*) (&sampleCount[0][0] - dataWindow.min.x - dataWindow.min.y * width), // base
+            sizeof (unsigned int) * 1,       // xStride
+            sizeof (unsigned int) * width)); // yStride
+    }
+    else
+    {
+       frameBuffer.insertSampleCountSlice (Slice (
+            IMF::UINT, // type // 7
+            (char*) (&localSampleCount[0][0] - dataWindow.min.x), // base of single scanline
+            sizeof (unsigned int) * 1,       // xStride
+            0)); // yStride is zero, since all scanlines are stored in the same place
+    }
     for (int i = 0; i < channelCount; i++)
     {
         PixelType type = NUM_PIXELTYPES;
@@ -116,14 +139,28 @@ generateRandomFile (
 
         int pointerSize = sizeof (char*);
 
-        frameBuffer.insert (
-            str, // name // 6
-            DeepSlice (
-                type, // type // 7
-                (char*) (&data[i][0][0] - dataWindow.min.x - dataWindow.min.y * width), // base // 8
-                pointerSize * 1,     // xStride// 9
-                pointerSize * width, // yStride// 10
-                sampleSize));        // sampleStride
+        if(bulkWrite)
+        {
+            frameBuffer.insert (
+                str, // name // 6
+                DeepSlice (
+                    type, // type // 7
+                    (char*) (&data[i][0][0] - dataWindow.min.x - dataWindow.min.y * width), // base // 8
+                    pointerSize * 1,     // xStride// 9
+                    pointerSize * width, // yStride// 10
+                    sampleSize));        // sampleStride
+        }
+        else
+        {
+            frameBuffer.insert (
+                str, // name // 6
+                DeepSlice (
+                    type, // type // 7
+                    (char*) (&data[i][0][0] - dataWindow.min.x ), // base // 8
+                    pointerSize * 1,     // xStride// 9
+                    0, // yStride// 10
+                    sampleSize));        // sampleStride
+        }
     }
 
     file.setFrameBuffer (frameBuffer);
@@ -184,11 +221,21 @@ generateRandomFile (
         }
 
         file.writePixels (height);
+
+        for (int i = 0; i < height; i++)
+          for (int j = 0; j < width; j++)
+            for (int k = 0; k < channelCount; k++)
+            {
+                if (channelTypes[k] == 0) delete[](unsigned int*) data[k][i][j];
+                if (channelTypes[k] == 1) delete[](half*) data[k][i][j];
+                if (channelTypes[k] == 2) delete[](float*) data[k][i][j];
+            }
+
     }
     else
     {
         cout << "per-line " << flush;
-        for (int i = 0; i < height; i++)
+        for (int row = 0; row < height; row++)
         {
             //
             // Fill in data at the last minute.
@@ -199,8 +246,10 @@ generateRandomFile (
                 int samples = random_int (maxSamples);
 
                 // big files write very sparse data for efficiency: most pixels have no samples
-                if (bigFile && (i % 63 != 0 || j % 63 != 0)) { samples = 0; }
-                sampleCount[i][j] = samples;
+                if (bigFile && (row % 63 != 0 || j % 63 != 0)) { samples = 0; }
+
+                localSampleCount[0][j] = samples;
+                sampleCount[row][j] = samples;
 
                 for (int k = 0; k < channelCount; k++)
                 {
@@ -208,42 +257,42 @@ generateRandomFile (
                     if (samples > 0)
                     {
                         if (channelTypes[k] == 0)
-                            data[k][i][j] = new unsigned int[sampleCount[i][j]];
+                            data[k][0][j] = new unsigned int[localSampleCount[0][j]];
                         if (channelTypes[k] == 1)
-                            data[k][i][j] = new half[sampleCount[i][j]];
+                            data[k][0][j] = new half[localSampleCount[0][j]];
                         if (channelTypes[k] == 2)
-                            data[k][i][j] = new float[sampleCount[i][j]];
-                        for (unsigned int l = 0; l < sampleCount[i][j]; l++)
+                            data[k][0][j] = new float[localSampleCount[0][j]];
+                        for (unsigned int l = 0; l < localSampleCount[0][j]; l++)
                         {
                             if (channelTypes[k] == 0)
-                                ((unsigned int*) data[k][i][j])[l] =
-                                    (i * width + j) % 2049;
+                                ((unsigned int*) data[k][0][j])[l] =
+                                    (row * width + j) % 2049;
                             if (channelTypes[k] == 1)
-                                ((half*) data[k][i][j])[l] =
-                                    (i * width + j) % 2049;
+                                ((half*) data[k][0][j])[l] =
+                                    (row * width + j) % 2049;
                             if (channelTypes[k] == 2)
-                                ((float*) data[k][i][j])[l] =
-                                    (i * width + j) % 2049;
+                                ((float*) data[k][0][j])[l] =
+                                    (row * width + j) % 2049;
                         }
                     }
                     else
                     {
-                        data[k][i][j] = nullptr;
+                        data[k][0][j] = nullptr;
                     }
                 }
             }
             file.writePixels (1);
+            for (int j = 0; j < width; j++)
+              for (int k = 0; k < channelCount; k++)
+              {
+                  if (channelTypes[k] == 0) delete[](unsigned int*) data[k][0][j];
+                  if (channelTypes[k] == 1) delete[](half*) data[k][0][j];
+                  if (channelTypes[k] == 2) delete[](float*) data[k][0][j];
+              }
         }
     }
 
-    for (int i = 0; i < height; i++)
-        for (int j = 0; j < width; j++)
-            for (int k = 0; k < channelCount; k++)
-            {
-                if (channelTypes[k] == 0) delete[](unsigned int*) data[k][i][j];
-                if (channelTypes[k] == 1) delete[](half*) data[k][i][j];
-                if (channelTypes[k] == 2) delete[](float*) data[k][i][j];
-            }
+
 }
 
 void
@@ -277,23 +326,37 @@ readFile (
     int width  = dataWindow.max.x - dataWindow.min.x + 1;
     int height = dataWindow.max.y - dataWindow.min.y + 1;
 
+    int bufferHeight = bulkRead ? height : 1;
+
     Array2D<unsigned int> localSampleCount;
-    localSampleCount.resizeErase (height, width);
+    localSampleCount.resizeErase (bufferHeight, width);
 
     // also test filling channels. Generate up to 2 extra channels
     int fillChannels = random_int (3);
 
     Array<Array2D<void*>> data (channelCount + fillChannels);
     for (int i = 0; i < channelCount + fillChannels; i++)
-        data[i].resizeErase (height, width);
+        data[i].resizeErase (bufferHeight, width);
 
     DeepFrameBuffer frameBuffer;
 
-    frameBuffer.insertSampleCountSlice (Slice (
-        IMF::UINT, // type // 7
-        (char*) (&localSampleCount[0][0] - dataWindow.min.x - dataWindow.min.y * width), // base // 8)
-        sizeof (unsigned int) * 1,       // xStride// 9
-        sizeof (unsigned int) * width)); // yStride// 10
+
+    if(bulkRead)
+    {
+        frameBuffer.insertSampleCountSlice (Slice (
+            IMF::UINT, // type // 7
+            (char*) (&localSampleCount[0][0] - dataWindow.min.x - dataWindow.min.y * width), // base // 8)
+            sizeof (unsigned int) * 1,       // xStride// 9
+            sizeof (unsigned int) * width)); // yStride// 10
+    }
+    else
+    {
+            frameBuffer.insertSampleCountSlice (Slice (
+            IMF::UINT, // type // 7
+            (char*) (&localSampleCount[0][0] - dataWindow.min.x), // base // 8)
+            sizeof (unsigned int) * 1,       // xStride// 9
+            0)); // yStride// 10
+    }
 
     vector<int> read_channel (channelCount);
 
@@ -320,14 +383,28 @@ readFile (
 
             int pointerSize = sizeof (char*);
 
-            frameBuffer.insert (
-                str, // name // 6
-                DeepSlice (
-                    type, // type // 7
-                    (char*) (&data[i][0][0] - dataWindow.min.x - dataWindow.min.y * width), // base // 8)
-                    pointerSize * 1,     // xStride// 9
-                    pointerSize * width, // yStride// 10
-                    sampleSize));        // sampleStride
+            if(bulkRead)
+            {
+                frameBuffer.insert (
+                    str, // name // 6
+                    DeepSlice (
+                        type, // type // 7
+                        (char*) (&data[i][0][0] - dataWindow.min.x - dataWindow.min.y * width), // base // 8)
+                        pointerSize * 1,     // xStride// 9
+                        pointerSize * width, // yStride// 10
+                        sampleSize));        // sampleStride
+            }
+            else
+            {
+               frameBuffer.insert (
+                    str, // name // 6
+                    DeepSlice (
+                        type, // type // 7
+                        (char*) (&data[i][0][0] - dataWindow.min.x ), // base // 8)
+                        pointerSize * 1,     // xStride// 9
+                        0, // yStride// 10
+                        sampleSize));        // sampleStride
+            }
             channels_added++;
         }
     }
@@ -346,14 +423,27 @@ readFile (
         // generate channel names that aren't in file but (might) interleave with existing file
         ss << i << "fill";
         string str = ss.str ();
-        frameBuffer.insert (str,                            // name // 6
-                                DeepSlice (type,                    // type // 7
-                                (char *) (&data[i+channelCount][0][0]
-                                          - dataWindow.min.x
-                                          - dataWindow.min.y * width),               // base // 8)
-                                pointerSize * 1,          // xStride// 9
-                                pointerSize * width,      // yStride// 10
-                                sampleSize));             // sampleStride
+        if(bulkRead)
+        {
+            frameBuffer.insert (str,                            // name // 6
+                                    DeepSlice (type,                    // type // 7
+                                    (char *) (&data[i+channelCount][0][0]
+                                            - dataWindow.min.x
+                                            - dataWindow.min.y * width),               // base // 8)
+                                    pointerSize * 1,          // xStride// 9
+                                    pointerSize * width,      // yStride// 10
+                                    sampleSize));             // sampleStride
+        }
+        else
+        {
+            frameBuffer.insert (str,                            // name // 6
+                                    DeepSlice (type,                    // type // 7
+                                    (char *) (&data[i+channelCount][0][0]
+                                            - dataWindow.min.x),               // base // 8)
+                                    pointerSize * 1,          // xStride// 9
+                                    0,      // yStride// 10
+                                    sampleSize));             // sampleStride
+        }
     }
     file.setFrameBuffer (frameBuffer);
 
@@ -395,120 +485,192 @@ readFile (
         }
 
         file.readPixels (dataWindow.min.y, dataWindow.max.y);
+
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++)
+                for (int k = 0; k < channelCount; k++)
+                {
+                    if (!randomChannels || read_channel[k] == 1)
+                    {
+                        for (unsigned int l = 0; l < sampleCount[i][j]; l++)
+                        {
+
+                            if (channelTypes[k] == 0)
+                            {
+                                unsigned int* value =
+                                    (unsigned int*) (data[k][i][j]);
+
+                                if (value[l] !=
+                                    static_cast<unsigned int> (i * width + j) %
+                                        2049)
+                                    cout << j << ", " << i << " error, should be "
+                                        << (i * width + j) % 2049 << ", is "
+                                        << value[l] << endl
+                                        << flush;
+                                assert (
+                                    value[l] ==
+                                    static_cast<unsigned int> (i * width + j) %
+                                        2049);
+                            }
+                            if (channelTypes[k] == 1)
+                            {
+                                half* value = (half*) (data[k][i][j]);
+                                if (value[l] != (i * width + j) % 2049)
+                                    cout << j << ", " << i << " error, should be "
+                                        << (i * width + j) % 2049 << ", is "
+                                        << value[l] << endl
+                                        << flush;
+                                assert (
+                                    ((half*) (data[k][i][j]))[l] ==
+                                    (i * width + j) % 2049);
+                            }
+                            if (channelTypes[k] == 2)
+                            {
+                                float* value = (float*) (data[k][i][j]);
+                                if (value[l] != (i * width + j) % 2049)
+                                    cout << j << ", " << i << " error, should be "
+                                        << (i * width + j) % 2049 << ", is "
+                                        << value[l] << endl
+                                        << flush;
+                                assert (
+                                    ((float*) (data[k][i][j]))[l] ==
+                                    (i * width + j) % 2049);
+                            }
+                        }
+                    }
+                }
+
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++)
+            {
+                for (int k = 0; k < channelCount; k++)
+                {
+                    if (!randomChannels || read_channel[k] == 1)
+                    {
+                        if (channelTypes[k] == 0)
+                            delete[](unsigned int*) data[k][i][j];
+                        if (channelTypes[k] == 1) delete[](half*) data[k][i][j];
+                        if (channelTypes[k] == 2) delete[](float*) data[k][i][j];
+                    }
+                }
+                for (int f = 0; f < fillChannels; ++f)
+                {
+                    delete[](float*) data[f + channelCount][i][j];
+                }
+            }
     }
 
     else
     {
         cout << "per-line " << flush;
-        for (int i = 0; i < dataWindow.max.y - dataWindow.min.y + 1; i++)
+        for (int row = 0; row < dataWindow.max.y - dataWindow.min.y + 1; row++)
         {
-            int y = i + dataWindow.min.y;
+            int y = row + dataWindow.min.y;
             file.readPixelSampleCounts (y);
 
             for (int j = 0; j < width; j++)
-                assert (localSampleCount[i][j] == sampleCount[i][j]);
+                assert (localSampleCount[0][j] == sampleCount[row][j]);
 
             for (int j = 0; j < width; j++)
             {
                 for (int k = 0; k < channelCount; k++)
                 {
-                    if (localSampleCount[i][j] > 0 &&
+                    if (localSampleCount[0][j] > 0 &&
                         (!randomChannels || read_channel[k] == 1))
                     {
                         if (channelTypes[k] == 0)
-                            data[k][i][j] =
-                                new unsigned int[localSampleCount[i][j]];
+                            data[k][0][j] =
+                                new unsigned int[localSampleCount[0][j]];
                         if (channelTypes[k] == 1)
-                            data[k][i][j] = new half[localSampleCount[i][j]];
+                            data[k][0][j] = new half[localSampleCount[0][j]];
                         if (channelTypes[k] == 2)
-                            data[k][i][j] = new float[localSampleCount[i][j]];
+                            data[k][0][j] = new float[localSampleCount[0][j]];
                     }
                     else
                     {
-                        data[k][i][j] = nullptr;
+                        data[k][0][j] = nullptr;
                     }
                 }
                 for (int f = 0; f < fillChannels; ++f)
                 {
-                    data[f + channelCount][i][j] =
-                        new float[localSampleCount[i][j]];
+                    data[f + channelCount][0][j] =
+                        new float[localSampleCount[0][j]];
                 }
             }
 
             file.readPixels (y);
-        }
-    }
-
-    for (int i = 0; i < height; i++)
-        for (int j = 0; j < width; j++)
-            for (int k = 0; k < channelCount; k++)
+            for (int j = 0; j < width; j++)
             {
-                if (!randomChannels || read_channel[k] == 1)
+                for (int k = 0; k < channelCount; k++)
                 {
-                    for (unsigned int l = 0; l < sampleCount[i][j]; l++)
+                    if (!randomChannels || read_channel[k] == 1)
                     {
-                        if (channelTypes[k] == 0)
+                        for (unsigned int l = 0; l < sampleCount[row][j]; l++)
                         {
-                            unsigned int* value =
-                                (unsigned int*) (data[k][i][j]);
-                            if (value[l] !=
-                                static_cast<unsigned int> (i * width + j) %
-                                    2049)
-                                cout << j << ", " << i << " error, should be "
-                                     << (i * width + j) % 2049 << ", is "
-                                     << value[l] << endl
-                                     << flush;
-                            assert (
-                                value[l] ==
-                                static_cast<unsigned int> (i * width + j) %
-                                    2049);
-                        }
-                        if (channelTypes[k] == 1)
-                        {
-                            half* value = (half*) (data[k][i][j]);
-                            if (value[l] != (i * width + j) % 2049)
-                                cout << j << ", " << i << " error, should be "
-                                     << (i * width + j) % 2049 << ", is "
-                                     << value[l] << endl
-                                     << flush;
-                            assert (
-                                ((half*) (data[k][i][j]))[l] ==
-                                (i * width + j) % 2049);
-                        }
-                        if (channelTypes[k] == 2)
-                        {
-                            float* value = (float*) (data[k][i][j]);
-                            if (value[l] != (i * width + j) % 2049)
-                                cout << j << ", " << i << " error, should be "
-                                     << (i * width + j) % 2049 << ", is "
-                                     << value[l] << endl
-                                     << flush;
-                            assert (
-                                ((float*) (data[k][i][j]))[l] ==
-                                (i * width + j) % 2049);
+                            if (channelTypes[k] == 0)
+                            {
+                                unsigned int* value =
+                                    (unsigned int*) (data[k][0][j]);
+                                if (value[l] !=
+                                    static_cast<unsigned int> (row * width + j) %
+                                        2049)
+                                    cout << j << ", " << row << " error, should be "
+                                        << (row * width + j) % 2049 << ", is "
+                                        << value[l] << endl
+                                        << flush;
+                                assert (
+                                    value[l] ==
+                                    static_cast<unsigned int> (row * width + j) %
+                                        2049);
+                            }
+                            if (channelTypes[k] == 1)
+                            {
+                                half* value = (half*) (data[k][0][j]);
+                                if (value[l] != (row * width + j) % 2049)
+                                    cout << j << ", " << row << " error, should be "
+                                        << (row * width + j) % 2049 << ", is "
+                                        << value[l] << endl
+                                        << flush;
+                                assert (
+                                    ((half*) (data[k][0][j]))[l] ==
+                                    (row * width + j) % 2049);
+                            }
+                            if (channelTypes[k] == 2)
+                            {
+                                float* value = (float*) (data[k][0][j]);
+                                if (value[l] != (row * width + j) % 2049)
+                                    cout << j << ", " << row << " error, should be "
+                                        << (row * width + j) % 2049 << ", is "
+                                        << value[l] << endl
+                                        << flush;
+                                assert (
+                                    ((float*) (data[k][0][j]))[l] ==
+                                    (row * width + j) % 2049);
+                            }
                         }
                     }
                 }
             }
 
-    for (int i = 0; i < height; i++)
-        for (int j = 0; j < width; j++)
-        {
-            for (int k = 0; k < channelCount; k++)
+            for (int j = 0; j < width; j++)
             {
-                if (!randomChannels || read_channel[k] == 1)
+                for (int k = 0; k < channelCount; k++)
                 {
-                    if (channelTypes[k] == 0)
-                        delete[](unsigned int*) data[k][i][j];
-                    if (channelTypes[k] == 1) delete[](half*) data[k][i][j];
-                    if (channelTypes[k] == 2) delete[](float*) data[k][i][j];
+                    if (!randomChannels || read_channel[k] == 1)
+                    {
+                        if (channelTypes[k] == 0)
+                            delete[](unsigned int*) data[k][0][j];
+                        if (channelTypes[k] == 1) delete[](half*) data[k][0][j];
+                        if (channelTypes[k] == 2) delete[](float*) data[k][0][j];
+                    }
+                }
+                for (int f = 0; f < fillChannels; ++f)
+                {
+                    delete[](float*) data[f + channelCount][0][j];
                 }
             }
-            for (int f = 0; f < fillChannels; ++f)
-            {
-                delete[](float*) data[f + channelCount][i][j];
-            }
         }
+    }
 }
 
 void
@@ -527,13 +689,14 @@ readWriteTest (
 
     for (int i = 0; i < testTimes; i++)
     {
-        int         compressionIndex = i % 3;
+        int         compressionIndex = i % 4;
         Compression compression;
         switch (compressionIndex)
         {
             case 0: compression = NO_COMPRESSION; break;
             case 1: compression = RLE_COMPRESSION; break;
             case 2: compression = ZIPS_COMPRESSION; break;
+            case 3: compression = ZSTD_COMPRESSION; break;
         }
 
         generateRandomFile (

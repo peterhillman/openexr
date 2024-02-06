@@ -202,13 +202,14 @@ bytesPerDeepLineTable (
 
 void
 offsetInLineBufferTable (
-    const vector<size_t>& bytesPerLine,
+    const vector<size_t>& samplesPerLine,
+    size_t                bytesPerSample,
     int                   scanline1,
     int                   scanline2,
     int                   linesInLineBuffer,
     vector<size_t>&       offsetInLineBuffer)
 {
-    offsetInLineBuffer.resize (bytesPerLine.size ());
+    offsetInLineBuffer.resize (samplesPerLine.size ());
 
     size_t offset = 0;
 
@@ -217,23 +218,24 @@ offsetInLineBufferTable (
         if (i % linesInLineBuffer == 0) offset = 0;
 
         offsetInLineBuffer[i] = offset;
-        offset += bytesPerLine[i];
+        offset += samplesPerLine[i]*bytesPerSample;
     }
 }
 
-void
-offsetInLineBufferTable (
-    const vector<size_t>& bytesPerLine,
-    int                   linesInLineBuffer,
-    vector<size_t>&       offsetInLineBuffer)
-{
-    offsetInLineBufferTable (
-        bytesPerLine,
-        0,
-        bytesPerLine.size () - 1,
-        linesInLineBuffer,
-        offsetInLineBuffer);
-}
+ void
+ offsetInLineBufferTable (
+     const vector<size_t>& samplesPerLine,
+     int                   linesInLineBuffer,
+     vector<size_t>&       offsetInLineBuffer)
+ {
+     offsetInLineBufferTable (
+         samplesPerLine,
+         1,
+         0,
+         samplesPerLine.size () - 1,
+         linesInLineBuffer,
+         offsetInLineBuffer);
+ }
 
 int
 lineBufferMinY (int y, int minY, int linesInLineBuffer)

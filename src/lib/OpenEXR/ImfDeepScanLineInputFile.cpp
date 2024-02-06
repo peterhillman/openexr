@@ -176,8 +176,6 @@ struct DeepScanLineInputFile::Data
     bool fileIsComplete;               // True if no scanlines are missing
                                        // in the file
     int            nextLineBufferMinY; // minimum y of the next linebuffer
-    vector<size_t> bytesPerLine;       // combined size of a line over all
-                                       // channels
     vector<size_t> offsetInLineBuffer; // offset for each scanline in its
                                        // linebuffer
     vector<InSliceInfo*> slices;       // info about channels in file
@@ -201,7 +199,7 @@ struct DeepScanLineInputFile::Data
     Array2D<unsigned int> sampleCount; // the number of samples
                                        // in each pixel unless bigFile is true
 
-    Array<unsigned int> lineSampleCount; // the number of samples
+    vector<size_t> lineSampleCount; // the number of samples
                                          // in each line
 
     Array<bool> gotSampleCount; // for each scanline, indicating if
@@ -535,6 +533,8 @@ readSampleCountForLineBlock (
     int                          lineBlockId,
     Array2D<unsigned int>*       sampleCountBuffer,
     int                          sampleCountMinY,
+    int                          sliceMinY,
+    int                          sliceMaxY,
     bool                         writeToSlice)
 {
     streamData->is->seekg (data->lineOffsets[lineBlockId]);
@@ -695,7 +695,7 @@ readSampleCountForLineBlock (
             //
             // Store the data in external slice
             //
-            if (writeToSlice)
+            if (writeToSlice && y>=sliceMinY && y<=sliceMaxY)
             {
                 sampleCount (base, xStride, yStride, x, y) = count;
             }
@@ -797,10 +797,13 @@ LineBufferTask::execute ()
             uint64_t uncompressedSize = 0;
             int      maxY             = min (_lineBuffer->maxY, _ifd->maxY);
 
+            //
+            // NOTE - assumes sampling on all channels is (1,1), which is required elsewhere
+            //
             for (int i = _lineBuffer->minY - _ifd->minY; i <= maxY - _ifd->minY;
                  ++i)
             {
-                uncompressedSize += (int) _ifd->bytesPerLine[i];
+                uncompressedSize += (int) _ifd->lineSampleCount[i]*_ifd->combinedSampleSize;
             }
 
             //
@@ -810,15 +813,15 @@ LineBufferTask::execute ()
             //
 
             if (_lineBuffer->compressor != 0) delete _lineBuffer->compressor;
-            uint64_t maxBytesPerLine = 0;
+            uint64_t maxSamplesPerLine = 0;
             for (int i = _lineBuffer->minY - _ifd->minY; i <= maxY - _ifd->minY;
                  ++i)
             {
-                if (_ifd->bytesPerLine[i] > maxBytesPerLine)
-                    maxBytesPerLine = _ifd->bytesPerLine[i];
+                if (_ifd->lineSampleCount[i] > maxSamplesPerLine)
+                    maxSamplesPerLine = _ifd->lineSampleCount[i];
             }
             _lineBuffer->compressor = newCompressor (
-                _ifd->header.compression (), maxBytesPerLine, _ifd->header);
+                _ifd->header.compression (), maxSamplesPerLine*_ifd->combinedSampleSize, _ifd->header);
 
             if (_lineBuffer->compressor &&
                 _lineBuffer->packedDataSize < uncompressedSize)
@@ -852,12 +855,12 @@ LineBufferTask::execute ()
                 _lineBuffer->format           = Compressor::XDR;
                 _lineBuffer->uncompressedData = _lineBuffer->buffer;
 
-                if (_lineBuffer->packedDataSize != maxBytesPerLine)
+                if (_lineBuffer->packedDataSize != maxSamplesPerLine*_ifd->combinedSampleSize)
                 {
                     THROW (
                         IEX_NAMESPACE::InputExc,
                         "Incorrect size for uncompressed data. Expected "
-                            << maxBytesPerLine << " got "
+                            << maxSamplesPerLine*_ifd->combinedSampleSize << " got "
                             << _lineBuffer->packedDataSize << " bytes");
                 }
             }
@@ -1053,6 +1056,7 @@ newLineBufferTask (
                     lineBlockId,
                     &lineBuffer->_tempCountBuffer,
                     lineBuffer->minY,
+                    0,0,
                     false);
             }
 
@@ -1162,7 +1166,7 @@ DeepScanLineInputFile::initialize (const Header& header)
             _data->sampleCount.resizeErase (
                 _data->maxY - _data->minY + 1, _data->maxX - _data->minX + 1);
         }
-        _data->lineSampleCount.resizeErase (_data->maxY - _data->minY + 1);
+        _data->lineSampleCount.resize (_data->maxY - _data->minY + 1);
 
         Compressor* compressor =
             newCompressor (_data->header.compression (), 0, _data->header);
@@ -1210,8 +1214,6 @@ DeepScanLineInputFile::initialize (const Header& header)
             _data->header.compression (),
             _data->maxSampleCountTableSize,
             _data->header);
-
-        _data->bytesPerLine.resize (_data->maxY - _data->minY + 1);
 
         const ChannelList& c = header.channels ();
 
@@ -1652,8 +1654,8 @@ DeepScanLineInputFile::setFrameBuffer (const DeepFrameBuffer& frameBuffer)
 
     for (long i = 0; i < _data->gotSampleCount.size (); i++)
         _data->gotSampleCount[i] = false;
-    for (size_t i = 0; i < _data->bytesPerLine.size (); i++)
-        _data->bytesPerLine[i] = 0;
+    for (size_t i = 0; i < _data->lineSampleCount.size (); i++)
+        _data->lineSampleCount[i] = 0;
 
     //
     // Store the new frame buffer.
@@ -2032,6 +2034,7 @@ DeepScanLineInputFile::readPixels (
     vector<size_t> offsetInLineBuffer;
     offsetInLineBufferTable (
         bytesPerLine,
+        1,
         minYInLineBuffer - _data->minY,
         maxYInLineBuffer - _data->minY,
         _data->linesInBuffer,
@@ -2279,7 +2282,7 @@ DeepScanLineInputFile::readPixelSampleCounts (int scanline1, int scanline2)
                     lineBlockId,
                     _data->bigFile ? nullptr : &_data->sampleCount,
                     _data->minY,
-                    true);
+                    scanLineMin,scanLineMax,true);
 
                 int minYInLineBuffer =
                     lineBlockId * _data->linesInBuffer + _data->minY;
@@ -2287,24 +2290,12 @@ DeepScanLineInputFile::readPixelSampleCounts (int scanline1, int scanline2)
                     minYInLineBuffer + _data->linesInBuffer - 1, _data->maxY);
 
                 //
-                // For each line within the block, get the count of bytes.
-                //
-
-                bytesPerDeepLineTable (
-                    _data->header,
-                    minYInLineBuffer,
-                    maxYInLineBuffer,
-                    _data->sampleCountSliceBase,
-                    _data->sampleCountXStride,
-                    _data->sampleCountYStride,
-                    _data->bytesPerLine);
-
-                //
                 // For each scanline within the block, get the offset.
                 //
 
                 offsetInLineBufferTable (
-                    _data->bytesPerLine,
+                    _data->lineSampleCount,
+                    _data->combinedSampleSize,
                     minYInLineBuffer - _data->minY,
                     maxYInLineBuffer - _data->minY,
                     _data->linesInBuffer,

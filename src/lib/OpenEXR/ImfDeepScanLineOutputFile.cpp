@@ -646,7 +646,16 @@ LineBufferTask::execute ()
                         slice.type);
                 }
             }
+
+            char*    ptr           = _lineBuffer->sampleCountTableBuffer+(_ofd->maxX-_ofd->minX+1)*sizeof(int)*(y - _lineBuffer->minY);
+            int count = 0;
+            for (int j = _ofd->minX; j <= _ofd->maxX; j++)
+            {
+                count += _ofd->getSampleCount (j, y);
+                Xdr::write<CharPtrIO> (ptr, count);
+            }
         }
+
 
         //
         // If the next scanline isn't past the bounds of the lineBuffer
@@ -691,18 +700,9 @@ LineBufferTask::execute ()
         // Compress the pixel sample count table.
         //
 
-        char*    ptr           = _lineBuffer->sampleCountTableBuffer;
-        uint64_t tableDataSize = 0;
-        for (int i = _lineBuffer->minY; i <= _lineBuffer->maxY; i++)
-        {
-            int count = 0;
-            for (int j = _ofd->minX; j <= _ofd->maxX; j++)
-            {
-                count += _ofd->getSampleCount (j, i);
-                Xdr::write<CharPtrIO> (ptr, count);
-                tableDataSize += sizeof (int);
-            }
-        }
+
+
+        uint64_t tableDataSize = sizeof(int)*(_ofd->maxX-_ofd->minX+1)*(_lineBuffer->maxY-_lineBuffer->minY+1);
 
         if (_lineBuffer->sampleCountTableCompressor)
         {
